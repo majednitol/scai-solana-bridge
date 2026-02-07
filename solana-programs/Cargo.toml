@@ -1,0 +1,23 @@
+[workspace]
+members = [
+    "programs/*"
+]
+resolver = "2"
+
+
+# Mainnet-safe release profile
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
+opt-level = "z"
+panic = "abort"
+incremental = false
+
+
+# Build overrides for dependencies
+[profile.release.build-override]
+opt-level = "z"
+codegen-units = 1
+incremental = false
