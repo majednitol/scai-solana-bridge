@@ -1,8 +1,10 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{Mint, Token, TokenAccount, mint_to};
-use crate::{state::*, errors::*, utils::crypto::*};
+use anchor_spl::token::{mint_to, Token, MintTo};
+use solana_program::keccak; 
+use crate::{state::*, utils::crypto::*, errors::BridgeError};
 
 #[derive(Accounts)]
+#[instruction(bridge_msg: BridgeMessage)]
 pub struct ExecuteMint<'info> {
     #[account(mut)]
     pub config: Account<'info, BridgeConfig>,
@@ -10,62 +12,73 @@ pub struct ExecuteMint<'info> {
     #[account(mut)]
     pub validator_set: Account<'info, ValidatorSet>,
 
-    #[account(init, payer = payer, space = 8 + 1, seeds = [b"exec", msg.order_id.as_ref()], bump)]
+    #[account(
+        init,
+        payer = payer,
+        space = 8 + ExecutedMessage::INIT_SPACE, // discriminator + bool
+        seeds = [b"exec", bridge_msg.order_id.as_ref()],
+        bump
+    )]
     pub executed: Account<'info, ExecutedMessage>,
-
     #[account(mut)]
-    pub mint: Account<'info, Mint>,
-
+    pub mint: AccountInfo<'info>,
     #[account(mut)]
-    pub recipient: Account<'info, TokenAccount>,
+    pub recipient: AccountInfo<'info>,
 
     pub token_program: Program<'info, Token>,
+
     #[account(mut)]
     pub payer: Signer<'info>,
+
     pub system_program: Program<'info, System>,
 }
 
-pub fn handler(
+pub fn execute_mint_handler(
     ctx: Context<ExecuteMint>,
-    msg: BridgeMessage,
-    signatures: Vec<[u8; 65]>
+    bridge_msg: BridgeMessage,
+    signatures: Vec<[u8; 65]>,
 ) -> Result<()> {
+    // Check paused
     require!(!ctx.accounts.config.paused, BridgeError::Paused);
 
     let now = Clock::get()?.unix_timestamp;
-    require!(now - msg.timestamp < 600, BridgeError::Expired);
+    require!(now - bridge_msg.timestamp < 600, BridgeError::Expired);
 
-    let hash = anchor_lang::solana_program::keccak::hashv(&[
-        &msg.try_to_vec()?
-    ]).0;
+    let hash = keccak::hashv(&[&bridge_msg.try_to_vec()?]).to_bytes();
 
-    let mut valid = 0u8;
-
-    for sig in signatures {
-        let addr = recover_address(&hash, &sig)?;
+    let mut valid: u8 = 0;
+    for sig in signatures.iter() {
+        let addr = recover_address(&hash, sig)?;
         if ctx.accounts.validator_set.validators.contains(&addr) {
-            valid += 1;
+            valid = valid.saturating_add(1);
         }
     }
-
     require!(
         valid >= ctx.accounts.config.validator_threshold,
         BridgeError::ThresholdNotMet
     );
+    let seeds: &[&[u8]] = &[b"config", &[ctx.accounts.config.bump]];
+    let signer = &[&seeds[..]];
 
     mint_to(
-        CpiContext::new(
+        CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
-            anchor_spl::token::MintTo {
-                mint: ctx.accounts.mint.to_account_info(),
-                to: ctx.accounts.recipient.to_account_info(),
+            MintTo {
+                mint: ctx.accounts.mint.clone(),
+                to: ctx.accounts.recipient.clone(),
                 authority: ctx.accounts.config.to_account_info(),
             },
+            signer,
         ),
-        msg.amount,
+        bridge_msg.amount,
     )?;
 
-    ctx.accounts.config.total_minted += msg.amount;
+    ctx.accounts.config.total_minted = ctx
+        .accounts
+        .config
+        .total_minted
+        .checked_add(bridge_msg.amount)
+        .ok_or(BridgeError::Overflow)?;
 
     Ok(())
 }

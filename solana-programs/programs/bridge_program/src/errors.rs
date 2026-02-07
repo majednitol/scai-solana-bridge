@@ -22,4 +22,7 @@ pub enum BridgeError {
 
     #[msg("Unauthorized")]
     Unauthorized,
+
+    #[msg("Overflow occurred")]
+    Overflow,
 }

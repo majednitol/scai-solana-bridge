@@ -1,18 +1,7 @@
 const anchor = require("@coral-xyz/anchor");
 const { assert } = require("chai");
-
-const {
-  Keypair,
-  PublicKey,
-  SystemProgram,
-} = require("@solana/web3.js");
-
-const {
-  createMint,
-  getOrCreateAssociatedTokenAccount,
-  getAccount,
-} = require("@solana/spl-token");
-
+const { Keypair, PublicKey, SystemProgram } = require("@solana/web3.js");
+const { createMint, getOrCreateAssociatedTokenAccount, getAccount } = require("@solana/spl-token");
 const keccak256 = require("keccak256");
 const secp256k1 = require("secp256k1");
 const BN = require("bn.js");
@@ -24,7 +13,6 @@ describe("SCAI ↔ Solana Bridge", () => {
   // -------------------------
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
-
   const program = anchor.workspace.BridgeProgram;
   const payer = provider.wallet;
 
@@ -47,7 +35,7 @@ describe("SCAI ↔ Solana Bridge", () => {
 
   const validatorAddresses = validatorPrivKeys.map((pk) => {
     const pub = secp256k1.publicKeyCreate(pk, false).slice(1);
-    return keccak256(pub).slice(12); // last 20 bytes
+    return Array.from(keccak256(pub).slice(-20)); // flat number[]
   });
 
   const threshold = 2;
@@ -83,7 +71,7 @@ describe("SCAI ↔ Solana Bridge", () => {
   it("initializes bridge", async () => {
     await program.methods
       .initialize({
-        validators: validatorAddresses.map((v) => Array.from(v)),
+        validators: validatorAddresses,
         threshold,
       })
       .accounts({
@@ -104,35 +92,36 @@ describe("SCAI ↔ Solana Bridge", () => {
   // Execute mint
   // -------------------------
   it("executes mint with valid validator signatures", async () => {
+    const orderId = crypto.randomBytes(32);
+    const sender = Buffer.alloc(20, 1);
+    const recipient = payer.publicKey.toBuffer();
+
     const msg = {
       sourceChainId: new BN(9000),
       destinationChainId: new BN(1),
-      orderId: Array.from(crypto.randomBytes(32)),
+      orderId: Array.from(orderId),
       amount: new BN(1_000_000_000),
-      sender: Array(20).fill(1),
-      recipient: payer.publicKey.toBytes(),
+      sender: Array.from(sender),
+      recipient: Array.from(recipient),
       nonce: new BN(1),
       timestamp: new BN(Math.floor(Date.now() / 1000)),
     };
 
     const msgBytes = program.coder.types.encode("BridgeMessage", msg);
-    const hash = keccak256(msgBytes);
+    const hash = keccak256(Uint8Array.from(msgBytes)); // always flat Uint8Array
 
     const signatures = validatorPrivKeys.slice(0, threshold).map((pk) => {
       const { signature, recid } = secp256k1.ecdsaSign(hash, pk);
-      return Buffer.concat([signature, Buffer.from([recid])]);
+      return Array.from(Buffer.concat([signature, Buffer.from([recid])])); // flat number[]
     });
 
     const [execPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("exec"), Buffer.from(msg.orderId)],
+      [Buffer.from("exec"), orderId],
       program.programId
     );
 
     await program.methods
-      .executeMint(
-        msg,
-        signatures.map((s) => Array.from(s))
-      )
+      .executeMint(msg, signatures)
       .accounts({
         config: config.publicKey,
         validatorSet: validatorSet.publicKey,
@@ -165,30 +154,30 @@ describe("SCAI ↔ Solana Bridge", () => {
   // Insufficient signatures
   // -------------------------
   it("rejects insufficient validator signatures", async () => {
+    const orderId = crypto.randomBytes(32);
+    const sender = Buffer.alloc(20, 2);
+    const recipient = payer.publicKey.toBuffer();
+
     const msg = {
       sourceChainId: new BN(9000),
       destinationChainId: new BN(1),
-      orderId: Array.from(crypto.randomBytes(32)),
+      orderId: Array.from(orderId),
       amount: new BN(100),
-      sender: Array(20).fill(2),
-      recipient: payer.publicKey.toBytes(),
+      sender: Array.from(sender),
+      recipient: Array.from(recipient),
       nonce: new BN(2),
       timestamp: new BN(Math.floor(Date.now() / 1000)),
     };
 
     const msgBytes = program.coder.types.encode("BridgeMessage", msg);
-    const hash = keccak256(msgBytes);
+    const hash = keccak256(Uint8Array.from(msgBytes));
 
-    const { signature, recid } = secp256k1.ecdsaSign(
-      hash,
-      validatorPrivKeys[0]
-    );
-
-    const sig = Buffer.concat([signature, Buffer.from([recid])]);
+    const { signature, recid } = secp256k1.ecdsaSign(hash, validatorPrivKeys[0]);
+    const sig = Array.from(Buffer.concat([signature, Buffer.from([recid])]));
 
     try {
       await program.methods
-        .executeMint(msg, [Array.from(sig)])
+        .executeMint(msg, [sig])
         .rpc();
       assert.fail("Insufficient signatures accepted");
     } catch (e) {
@@ -205,7 +194,7 @@ describe("SCAI ↔ Solana Bridge", () => {
     await program.methods
       .initiateBurn(
         new BN(500_000_000),
-        Array.from(validatorAddresses[0])
+        validatorAddresses[0]
       )
       .accounts({
         config: config.publicKey,
@@ -229,10 +218,7 @@ describe("SCAI ↔ Solana Bridge", () => {
     const newValidators = validatorAddresses.slice(0, 2);
 
     await program.methods
-      .updateValidators(
-        newValidators.map((v) => Array.from(v)),
-        2
-      )
+      .updateValidators(newValidators, 2)
       .accounts({
         config: config.publicKey,
         validatorSet: validatorSet.publicKey,

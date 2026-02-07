@@ -20,7 +20,7 @@ pub struct Initialize<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
+pub fn initialize_handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     let cfg = &mut ctx.accounts.config;
     cfg.admin = ctx.accounts.payer.key();
     cfg.validator_threshold = args.threshold;
@@ -28,9 +28,19 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     cfg.paused = false;
     cfg.total_minted = 0;
     cfg.total_burned = 0;
+    cfg.bump = 0;
+
 
     let vs = &mut ctx.accounts.validator_set;
-    vs.validators = args.validators;
+    for i in 0..MAX_VALIDATORS {
+        vs.validators[i] = if i < args.validators.len() {
+            args.validators[i]
+        } else {
+            [0u8; 20]
+        };
+    }
+
+    vs.count = args.validators.len() as u8;
     vs.epoch = 1;
 
     Ok(())
