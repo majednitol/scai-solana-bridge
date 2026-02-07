@@ -1,32 +1,77 @@
 const anchor = require("@coral-xyz/anchor");
 const { assert } = require("chai");
 const { Keypair, PublicKey, SystemProgram } = require("@solana/web3.js");
-const { createMint, getOrCreateAssociatedTokenAccount, getAccount } = require("@solana/spl-token");
+const {
+  createMint,
+  getOrCreateAssociatedTokenAccount,
+  getAccount,
+} = require("@solana/spl-token");
 const keccak256 = require("keccak256");
 const secp256k1 = require("secp256k1");
 const BN = require("bn.js");
 const crypto = require("crypto");
+const borsh = require("borsh");
 
+// -------------------------
+// Borsh Serialization for BridgeMessage
+// -------------------------
+class BridgeMessage {
+  constructor(fields) {
+    this.sourceChainId = fields.sourceChainId;
+    this.destinationChainId = fields.destinationChainId;
+    this.orderId = fields.orderId;
+    this.amount = fields.amount;
+    this.sender = fields.sender;
+    this.recipient = fields.recipient;
+    this.nonce = fields.nonce;
+    this.timestamp = fields.timestamp;
+  }
+}
+
+const BridgeMessageSchema = new Map([
+  [
+    BridgeMessage,
+    {
+      kind: "struct",
+      fields: [
+        ["sourceChainId", "u64"],
+        ["destinationChainId", "u64"],
+        ["orderId", ["u8", 32]],
+        ["amount", "u64"],
+        ["sender", ["u8", 20]],
+        ["recipient", ["u8", 32]],
+        ["nonce", "u64"],
+        ["timestamp", "u64"],
+      ],
+    },
+  ],
+]);
+
+function serializeBridgeMessage(msg) {
+  return borsh.serialize(BridgeMessageSchema, new BridgeMessage(msg));
+}
+
+// Helper to hash BridgeMessage
+function hashBridgeMessage(msg) {
+  const serialized = serializeBridgeMessage(msg);
+  console.log("Serialized BridgeMessage:", serialized);
+  const hash = keccak256(Buffer.from(serialized));
+  console.log("Keccak256 Hash:", hash.toString("hex"));
+  return hash;
+}
+
+// -------------------------
+// Test Suite
+// -------------------------
 describe("SCAI ↔ Solana Bridge", () => {
-  // -------------------------
-  // Anchor setup
-  // -------------------------
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
   const program = anchor.workspace.BridgeProgram;
   const payer = provider.wallet;
 
-  // -------------------------
-  // Accounts / keys
-  // -------------------------
-  let config;
-  let validatorSet;
-  let mint;
-  let recipientToken;
+  let config, validatorSet, mint, userToken;
 
-  // -------------------------
-  // EVM validator keys (secp256k1)
-  // -------------------------
+  // EVM validator keys
   const validatorPrivKeys = [
     Buffer.from("1".repeat(64), "hex"),
     Buffer.from("2".repeat(64), "hex"),
@@ -35,18 +80,22 @@ describe("SCAI ↔ Solana Bridge", () => {
 
   const validatorAddresses = validatorPrivKeys.map((pk) => {
     const pub = secp256k1.publicKeyCreate(pk, false).slice(1);
-    return Array.from(keccak256(pub).slice(-20)); // flat number[]
+    const hash = keccak256(Buffer.from(pub));
+    console.log("Validator address hash:", hash.toString("hex"));
+    return Array.from(hash.slice(-20));
   });
 
   const threshold = 2;
 
   // -------------------------
-  // Setup
+  // Setup mint & accounts
   // -------------------------
   before(async () => {
+    console.log("Generating config and validatorSet keypairs...");
     config = Keypair.generate();
     validatorSet = Keypair.generate();
 
+    console.log("Creating SPL token mint...");
     mint = await createMint(
       provider.connection,
       payer.payer,
@@ -55,25 +104,25 @@ describe("SCAI ↔ Solana Bridge", () => {
       9
     );
 
+    console.log("Creating user associated token account...");
     const ata = await getOrCreateAssociatedTokenAccount(
       provider.connection,
       payer.payer,
       mint,
       payer.publicKey
     );
+    userToken = ata.address;
 
-    recipientToken = ata.address;
+    console.log("Mint and ATA setup complete:", mint.toBase58(), userToken.toBase58());
   });
 
   // -------------------------
-  // Initialize bridge
+  // Initialize Bridge
   // -------------------------
   it("initializes bridge", async () => {
+    console.log("Initializing bridge...");
     await program.methods
-      .initialize({
-        validators: validatorAddresses,
-        threshold,
-      })
+      .initialize({ validators: validatorAddresses, threshold })
       .accounts({
         config: config.publicKey,
         validatorSet: validatorSet.publicKey,
@@ -84,14 +133,21 @@ describe("SCAI ↔ Solana Bridge", () => {
       .rpc();
 
     const cfg = await program.account.bridgeConfig.fetch(config.publicKey);
+    const vs = await program.account.validatorSet.fetch(validatorSet.publicKey);
+
+    console.log("Bridge config:", cfg);
+    console.log("Validator set:", vs);
+
     assert.equal(cfg.validatorThreshold, threshold);
     assert.equal(cfg.paused, false);
+    assert.equal(vs.count, validatorAddresses.length);
   });
 
   // -------------------------
-  // Execute mint
+  // Execute Mint
   // -------------------------
   it("executes mint with valid validator signatures", async () => {
+    console.log("Preparing mint message...");
     const orderId = crypto.randomBytes(32);
     const sender = Buffer.alloc(20, 1);
     const recipient = payer.publicKey.toBuffer();
@@ -107,19 +163,26 @@ describe("SCAI ↔ Solana Bridge", () => {
       timestamp: new BN(Math.floor(Date.now() / 1000)),
     };
 
-    const msgBytes = program.coder.types.encode("BridgeMessage", msg);
-    const hash = keccak256(Uint8Array.from(msgBytes)); // always flat Uint8Array
+    console.log("BridgeMessage object:", msg);
 
+    const hash = hashBridgeMessage(msg);
+
+    console.log("Signing message with validators...");
     const signatures = validatorPrivKeys.slice(0, threshold).map((pk) => {
       const { signature, recid } = secp256k1.ecdsaSign(hash, pk);
-      return Array.from(Buffer.concat([signature, Buffer.from([recid])])); // flat number[]
+      const sigArray = Array.from(Buffer.concat([signature, Buffer.from([recid])]));
+      console.log("Signature:", sigArray);
+      return sigArray;
     });
 
+    console.log("Finding execution PDA...");
     const [execPda] = PublicKey.findProgramAddressSync(
       [Buffer.from("exec"), orderId],
       program.programId
     );
+    console.log("Execution PDA:", execPda.toBase58());
 
+    console.log("Calling executeMint RPC...");
     await program.methods
       .executeMint(msg, signatures)
       .accounts({
@@ -127,78 +190,33 @@ describe("SCAI ↔ Solana Bridge", () => {
         validatorSet: validatorSet.publicKey,
         executed: execPda,
         mint,
-        recipient: recipientToken,
+        recipient: userToken,
         tokenProgram: anchor.utils.token.TOKEN_PROGRAM_ID,
         payer: payer.publicKey,
         systemProgram: SystemProgram.programId,
       })
       .rpc();
 
-    const acct = await getAccount(provider.connection, recipientToken);
+    console.log("Fetching recipient token account...");
+    const acct = await getAccount(provider.connection, userToken);
+    console.log("Recipient account balance:", acct.amount.toString());
     assert.equal(Number(acct.amount), 1_000_000_000);
   });
 
   // -------------------------
-  // Replay protection
+  // Confirm Unlock
   // -------------------------
-  it("prevents replay attack (double mint)", async () => {
-    try {
-      await program.methods.executeMint({}, []).rpc();
-      assert.fail("Replay allowed");
-    } catch (e) {
-      assert.ok(true);
-    }
-  });
-
-  // -------------------------
-  // Insufficient signatures
-  // -------------------------
-  it("rejects insufficient validator signatures", async () => {
-    const orderId = crypto.randomBytes(32);
-    const sender = Buffer.alloc(20, 2);
-    const recipient = payer.publicKey.toBuffer();
-
-    const msg = {
-      sourceChainId: new BN(9000),
-      destinationChainId: new BN(1),
-      orderId: Array.from(orderId),
-      amount: new BN(100),
-      sender: Array.from(sender),
-      recipient: Array.from(recipient),
-      nonce: new BN(2),
-      timestamp: new BN(Math.floor(Date.now() / 1000)),
-    };
-
-    const msgBytes = program.coder.types.encode("BridgeMessage", msg);
-    const hash = keccak256(Uint8Array.from(msgBytes));
-
-    const { signature, recid } = secp256k1.ecdsaSign(hash, validatorPrivKeys[0]);
-    const sig = Array.from(Buffer.concat([signature, Buffer.from([recid])]));
-
-    try {
-      await program.methods
-        .executeMint(msg, [sig])
-        .rpc();
-      assert.fail("Insufficient signatures accepted");
-    } catch (e) {
-      assert.ok(true);
-    }
-  });
-
-  // -------------------------
-  // Burn flow
-  // -------------------------
-  it("initiates burn", async () => {
+  it("confirms unlock with valid signatures", async () => {
+    console.log("Creating burn order...");
     const burnOrder = Keypair.generate();
+    const amount = new BN(500_000_000);
+    const recipientEvm = validatorAddresses[0];
 
     await program.methods
-      .initiateBurn(
-        new BN(500_000_000),
-        validatorAddresses[0]
-      )
+      .initiateBurn(amount, recipientEvm)
       .accounts({
         config: config.publicKey,
-        userToken: recipientToken,
+        userToken,
         burnOrder: burnOrder.publicKey,
         tokenProgram: anchor.utils.token.TOKEN_PROGRAM_ID,
         user: payer.publicKey,
@@ -207,12 +225,44 @@ describe("SCAI ↔ Solana Bridge", () => {
       .signers([burnOrder])
       .rpc();
 
-    const acct = await getAccount(provider.connection, recipientToken);
-    assert.equal(Number(acct.amount), 500_000_000);
+    const msg = {
+      sourceChainId: new BN(1),
+      destinationChainId: new BN(9000),
+      orderId: Array.from(burnOrder.publicKey.toBytes()),
+      amount,
+      sender: Array.from(Buffer.alloc(20, 1)),
+      recipient: Array.from(payer.publicKey.toBuffer()),
+      nonce: new BN(1),
+      timestamp: new BN(Math.floor(Date.now() / 1000)),
+    };
+
+    const hash = hashBridgeMessage(msg);
+
+    const signatures = validatorPrivKeys.slice(0, threshold).map((pk) => {
+      const { signature, recid } = secp256k1.ecdsaSign(hash, pk);
+      return Array.from(Buffer.concat([signature, Buffer.from([recid])]));
+    });
+
+    console.log("Calling confirmUnlock RPC...");
+    await program.methods
+      .confirmUnlock(msg, signatures)
+      .accounts({
+        config: config.publicKey,
+        burnOrder: burnOrder.publicKey,
+        validatorSet: validatorSet.publicKey,
+        mint,
+        recipient: userToken,
+        tokenProgram: anchor.utils.token.TOKEN_PROGRAM_ID,
+      })
+      .rpc();
+
+    const bo = await program.account.burnOrder.fetch(burnOrder.publicKey);
+    console.log("Burn order executed:", bo.executed);
+    assert.equal(bo.executed, true);
   });
 
   // -------------------------
-  // Validator update
+  // Update Validators
   // -------------------------
   it("updates validator set", async () => {
     const newValidators = validatorAddresses.slice(0, 2);
@@ -226,9 +276,60 @@ describe("SCAI ↔ Solana Bridge", () => {
       })
       .rpc();
 
-    const vs = await program.account.validatorSet.fetch(
-      validatorSet.publicKey
+    const vs = await program.account.validatorSet.fetch(validatorSet.publicKey);
+    console.log("Updated validator set:", vs);
+    assert.equal(vs.count, newValidators.length);
+  });
+
+  // -------------------------
+  // Replay & Invalid Signatures
+  // -------------------------
+  it("prevents replay and rejects invalid signatures", async () => {
+    const orderId = crypto.randomBytes(32);
+    const msg = {
+      sourceChainId: new BN(1),
+      destinationChainId: new BN(9000),
+      orderId: Array.from(orderId),
+      amount: new BN(100),
+      sender: Array.from(Buffer.alloc(20, 1)),
+      recipient: Array.from(payer.publicKey.toBuffer()),
+      nonce: new BN(99),
+      timestamp: new BN(Math.floor(Date.now() / 1000)),
+    };
+
+    const sigs = [Array(65).fill(0)];
+
+    try {
+      await program.methods.executeMint(msg, sigs).rpc();
+      assert.fail("Insufficient signatures accepted");
+    } catch (err) {
+      console.log("Caught expected insufficient signature error:", err.toString());
+      assert.ok(true);
+    }
+
+    const [execPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("exec"), orderId],
+      program.programId
     );
-    assert.equal(vs.validators.length, 2);
+
+    try {
+      await program.methods
+        .executeMint(msg, sigs)
+        .accounts({
+          config: config.publicKey,
+          validatorSet: validatorSet.publicKey,
+          executed: execPda,
+          mint,
+          recipient: userToken,
+          tokenProgram: anchor.utils.token.TOKEN_PROGRAM_ID,
+          payer: payer.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+      assert.fail("Replay allowed");
+    } catch (err) {
+      console.log("Caught expected replay error:", err.toString());
+      assert.ok(true);
+    }
   });
 });

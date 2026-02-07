@@ -1,7 +1,16 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{mint_to, Token, MintTo};
-use solana_program::keccak; 
+use anchor_spl::token::{mint_to, MintTo, Token};
+use solana_program::keccak;
 use crate::{state::*, utils::crypto::*, errors::BridgeError};
+
+/// Event emitted when a mint is executed
+#[event]
+pub struct MintExecuted {
+    pub order_id: [u8; 32],
+    pub amount: u64,
+    pub recipient: [u8; 32],
+    pub epoch: u64,
+}
 
 #[derive(Accounts)]
 #[instruction(bridge_msg: BridgeMessage)]
@@ -15,13 +24,17 @@ pub struct ExecuteMint<'info> {
     #[account(
         init,
         payer = payer,
-        space = 8 + ExecutedMessage::INIT_SPACE, // discriminator + bool
+        space = 8 + ExecutedMessage::INIT_SPACE,
         seeds = [b"exec", bridge_msg.order_id.as_ref()],
         bump
     )]
     pub executed: Account<'info, ExecutedMessage>,
+
+    /// CHECK: SPL Token mint account; verified via CPI
     #[account(mut)]
     pub mint: AccountInfo<'info>,
+
+    /// CHECK: Recipient SPL token account; verified via CPI
     #[account(mut)]
     pub recipient: AccountInfo<'info>,
 
@@ -38,26 +51,40 @@ pub fn execute_mint_handler(
     bridge_msg: BridgeMessage,
     signatures: Vec<[u8; 65]>,
 ) -> Result<()> {
-    // Check paused
-    require!(!ctx.accounts.config.paused, BridgeError::Paused);
+    let cfg = &mut ctx.accounts.config;
 
+    // Ensure bridge is active
+    require!(!cfg.paused, BridgeError::Paused);
+
+    // Prevent expired messages (10 minutes window)
     let now = Clock::get()?.unix_timestamp;
     require!(now - bridge_msg.timestamp < 600, BridgeError::Expired);
 
+    // Prevent double execution (replay protection)
+    require!(!ctx.accounts.executed.executed, BridgeError::Replay);
+
+    // Compute Keccak256 hash of the bridge message
     let hash = keccak::hashv(&[&bridge_msg.try_to_vec()?]).to_bytes();
 
-    let mut valid: u8 = 0;
+    // Validate signatures
+    let mut valid_signatures: u8 = 0;
     for sig in signatures.iter() {
         let addr = recover_address(&hash, sig)?;
         if ctx.accounts.validator_set.validators.contains(&addr) {
-            valid = valid.saturating_add(1);
+            valid_signatures = valid_signatures.saturating_add(1);
         }
     }
+
     require!(
-        valid >= ctx.accounts.config.validator_threshold,
+        valid_signatures >= cfg.validator_threshold,
         BridgeError::ThresholdNotMet
     );
-    let seeds: &[&[u8]] = &[b"config", &[ctx.accounts.config.bump]];
+
+    // Mark message as executed to prevent replay
+    ctx.accounts.executed.executed = true;
+
+    // Mint tokens via CPI using PDA as authority
+    let seeds: &[&[u8]] = &[b"config", &[cfg.bump]];
     let signer = &[&seeds[..]];
 
     mint_to(
@@ -66,19 +93,26 @@ pub fn execute_mint_handler(
             MintTo {
                 mint: ctx.accounts.mint.clone(),
                 to: ctx.accounts.recipient.clone(),
-                authority: ctx.accounts.config.to_account_info(),
+                authority: cfg.to_account_info(),
             },
             signer,
         ),
         bridge_msg.amount,
     )?;
 
-    ctx.accounts.config.total_minted = ctx
-        .accounts
-        .config
+    // Update total minted safely
+    cfg.total_minted = cfg
         .total_minted
         .checked_add(bridge_msg.amount)
         .ok_or(BridgeError::Overflow)?;
+
+    // Emit event for off-chain listeners
+    emit!(MintExecuted {
+        order_id: bridge_msg.order_id,
+        amount: bridge_msg.amount,
+        recipient: bridge_msg.recipient,
+        epoch: ctx.accounts.validator_set.epoch,
+    });
 
     Ok(())
 }
