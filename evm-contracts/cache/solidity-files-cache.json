@@ -2,8 +2,8 @@
   "_format": "hh-sol-cache-2",
   "files": {
     "/Users/majedurrahman/coding/scai-solana-bridge/evm-contracts/contracts/BridgeManager.sol": {
-      "lastModificationDate": 1770374189373,
-      "contentHash": "7e0f382c731bed93432cf80fbe94f762",
+      "lastModificationDate": 1770537659118,
+      "contentHash": "984ec2715e8f01d0087919192a371cb1",
       "sourceName": "contracts/BridgeManager.sol",
       "solcConfig": {
         "version": "0.8.28",
@@ -31,10 +31,9 @@
         }
       },
       "imports": [
-        "@openzeppelin/contracts/utils/cryptography/ECDSA.sol",
-        "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol",
-        "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol",
+        "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol",
         "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol",
+        "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol",
         "./ValidatorRegistry.sol",
         "./MessageVerifier.sol"
       ],
@@ -46,9 +45,49 @@
       ]
     },
     "/Users/majedurrahman/coding/scai-solana-bridge/evm-contracts/contracts/ValidatorRegistry.sol": {
-      "lastModificationDate": 1770372335803,
-      "contentHash": "9ded4bddfecc8bf5c16a8dc6d1948a86",
+      "lastModificationDate": 1770537962019,
+      "contentHash": "3877a5f96c31be4fa1d8ef101c7fde03",
       "sourceName": "contracts/ValidatorRegistry.sol",
+      "solcConfig": {
+        "version": "0.8.28",
+        "settings": {
+          "evmVersion": "paris",
+          "optimizer": {
+            "enabled": false,
+            "runs": 200
+          },
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata",
+                "storageLayout"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol",
+        "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol"
+      ],
+      "versionPragmas": [
+        "^0.8.20"
+      ],
+      "artifacts": [
+        "ValidatorRegistry"
+      ]
+    },
+    "/Users/majedurrahman/coding/scai-solana-bridge/evm-contracts/contracts/MessageVerifier.sol": {
+      "lastModificationDate": 1770535252652,
+      "contentHash": "3ba9eb3bc9dc20dcc3cbafaf3aee9d3f",
+      "sourceName": "contracts/MessageVerifier.sol",
       "solcConfig": {
         "version": "0.8.28",
         "settings": {
@@ -79,46 +118,6 @@
         "^0.8.20"
       ],
       "artifacts": [
-        "ValidatorRegistry"
-      ]
-    },
-    "/Users/majedurrahman/coding/scai-solana-bridge/evm-contracts/contracts/MessageVerifier.sol": {
-      "lastModificationDate": 1770372347914,
-      "contentHash": "1a5a32cc97ae32fc55f64c4a0c634b00",
-      "sourceName": "contracts/MessageVerifier.sol",
-      "solcConfig": {
-        "version": "0.8.28",
-        "settings": {
-          "evmVersion": "paris",
-          "optimizer": {
-            "enabled": false,
-            "runs": 200
-          },
-          "outputSelection": {
-            "*": {
-              "*": [
-                "abi",
-                "evm.bytecode",
-                "evm.deployedBytecode",
-                "evm.methodIdentifiers",
-                "metadata",
-                "storageLayout"
-              ],
-              "": [
-                "ast"
-              ]
-            }
-          }
-        }
-      },
-      "imports": [
-        "./ValidatorRegistry.sol"
-      ],
-      "versionPragmas": [
-        "^0.8.20"
-      ],
-      "artifacts": [
-        "IValidatorRegistry",
         "MessageVerifier"
       ]
     },
@@ -584,8 +583,8 @@
       ]
     },
     "/Users/majedurrahman/coding/scai-solana-bridge/evm-contracts/contracts/SCAITokenLocker.sol": {
-      "lastModificationDate": 1770372371810,
-      "contentHash": "121093f0d098bc03fba15189e4b4a34a",
+      "lastModificationDate": 1770535230115,
+      "contentHash": "f570607109d837ce18be5d247b565688",
       "sourceName": "contracts/SCAITokenLocker.sol",
       "solcConfig": {
         "version": "0.8.28",
@@ -616,6 +615,7 @@
         "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol",
         "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol",
         "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol",
+        "./ValidatorRegistry.sol",
         "./MessageVerifier.sol"
       ],
       "versionPragmas": [

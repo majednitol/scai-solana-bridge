@@ -1,26 +1,39 @@
 use anchor_lang::prelude::*;
-use solana_program::keccak::{hashv, Hash};
-use k256::ecdsa::{Signature, VerifyingKey};
-use crate::errors::*;
+use solana_program::{
+    keccak::hash,
+    secp256k1_recover::secp256k1_recover,
+};
+use crate::errors::BridgeError;
 
-pub fn recover_address(_hash: &[u8; 32], sig: &[u8; 65]) -> Result<[u8; 20]> {
-    let _recovery_id = sig[64];
-    let sig_bytes: [u8; 64] = sig[0..64]
-        .try_into()
+pub fn recover_address(hash_bytes: &[u8; 32], sig: &[u8; 65]) -> Result<[u8; 20]> {
+    require!(sig.len() == 65, BridgeError::InvalidSignatures);
+
+    // Split signature: 64 bytes (r,s) + 1 byte recovery ID (v)
+    let (signature, recovery_id_slice) = sig.split_at(64);
+    let mut recovery_id = recovery_id_slice[0];
+
+    // Normalize recovery ID
+    if recovery_id >= 27 {
+        recovery_id -= 27;
+    }
+
+    // Ensure recovery_id is 0 or 1 (Ethereum-style)
+    require!(recovery_id <= 1, BridgeError::InvalidSignatures);
+
+    // Recover uncompressed public key using Solana native syscall
+    let pubkey = secp256k1_recover(hash_bytes, recovery_id, signature)
         .map_err(|_| error!(BridgeError::InvalidSignatures))?;
 
-    let signature = Signature::from_bytes(&sig_bytes.into())
-        .map_err(|_| error!(BridgeError::InvalidSignatures))?;
+    // Take Keccak256 hash of the recovered public key
+    let pubkey_hash = hash(&pubkey.to_bytes());
 
-    let pubkey = VerifyingKey::from_sec1_bytes(&signature.to_bytes())
-        .map_err(|_| error!(BridgeError::InvalidSignatures))?;
-    let encoded = pubkey.to_encoded_point(false);
-    let pubkey_bytes = encoded.as_bytes();
+    // Last 20 bytes of Keccak hash is the Ethereum-style address
+    let mut address = [0u8; 20];
+    address.copy_from_slice(&pubkey_hash.to_bytes()[12..32]);
 
-    let addr_hash = keccak_hash(&pubkey_bytes[1..]);
-    Ok(addr_hash[12..32].try_into().unwrap())
+    Ok(address)
 }
+
 pub fn keccak_hash(data: &[u8]) -> [u8; 32] {
-    let h: Hash = hashv(&[data]);
-    h.to_bytes()
+    hash(data).to_bytes()
 }

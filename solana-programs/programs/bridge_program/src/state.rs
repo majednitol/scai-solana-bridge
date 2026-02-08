@@ -13,11 +13,20 @@ pub struct BridgeConfig {
     pub bump: u8,
 }
 
+impl BridgeConfig {
+   pub const LEN: usize = 32 + 1 + 1 + 1 + 8 + 8 + 1;// size in bytes
+}
+
 #[account]
 pub struct ValidatorSet {
     pub validators: [[u8; 20]; MAX_VALIDATORS],
     pub count: u8,
     pub epoch: u64,
+    pub bump: u8, // add bump for PDA authority
+}
+
+impl ValidatorSet {
+   pub const LEN: usize = 32 + 1 + 1 + 1 + 8 + 8 + 1;
 }
 
 #[account]

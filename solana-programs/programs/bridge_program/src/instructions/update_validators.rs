@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
-use crate::{state::*, errors::BridgeError};
+use crate::state::*;
+use crate::errors::BridgeError;
 
 /// Event emitted when validators are updated
 #[event]
@@ -7,17 +8,21 @@ pub struct ValidatorsUpdated {
     pub epoch: u64,
     pub new_threshold: u8,
     pub validator_count: u8,
+    pub updated_at: i64, // timestamp for relayer tracking
 }
 
 /// Accounts required to update validators
 #[derive(Accounts)]
 pub struct UpdateValidators<'info> {
+    /// Bridge configuration account
     #[account(mut, has_one = admin)]
     pub config: Account<'info, BridgeConfig>,
-    
+
+    /// Validator set account
     #[account(mut)]
     pub validator_set: Account<'info, ValidatorSet>,
 
+    /// Admin signer
     pub admin: Signer<'info>,
 }
 
@@ -29,37 +34,38 @@ pub fn update_validators_handler(
     let cfg = &mut ctx.accounts.config;
     let vs = &mut ctx.accounts.validator_set;
 
-    // Pause check: optional but recommended
+    // 1️⃣ Pause check
     require!(!cfg.paused, BridgeError::Paused);
 
-    // Ensure threshold is valid
+    // 2️⃣ Validate new threshold
     require!(
         new_threshold > 0 && new_threshold <= new_validators.len() as u8,
         BridgeError::ThresholdNotMet
     );
 
-    // Update validators, zero-fill remaining slots
+    // 3️⃣ Update validator set
     for i in 0..vs.validators.len() {
-        if i < new_validators.len() {
-            vs.validators[i] = new_validators[i];
+        vs.validators[i] = if i < new_validators.len() {
+            new_validators[i]
         } else {
-            vs.validators[i] = [0u8; 20]; 
-        }
+            [0u8; 20] // zero-fill remaining slots
+        };
     }
 
-    // Update validator count and threshold
+    // 4️⃣ Update metadata
     vs.count = new_validators.len() as u8;
     cfg.validator_count = vs.count;
     cfg.validator_threshold = new_threshold;
 
-    // Increment epoch for tracking changes
+    // 5️⃣ Increment epoch
     vs.epoch = vs.epoch.saturating_add(1);
 
-    // Emit event for off-chain relayers / monitoring
+    // 6️⃣ Emit event for off-chain relayers
     emit!(ValidatorsUpdated {
         epoch: vs.epoch,
         new_threshold,
         validator_count: vs.count,
+        updated_at: Clock::get()?.unix_timestamp,
     });
 
     Ok(())

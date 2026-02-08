@@ -54,9 +54,7 @@ function serializeBridgeMessage(msg) {
 // Helper to hash BridgeMessage
 function hashBridgeMessage(msg) {
   const serialized = serializeBridgeMessage(msg);
-  console.log("Serialized BridgeMessage:", serialized);
   const hash = keccak256(Buffer.from(serialized));
-  console.log("Keccak256 Hash:", hash.toString("hex"));
   return hash;
 }
 
@@ -81,7 +79,6 @@ describe("SCAI ↔ Solana Bridge", () => {
   const validatorAddresses = validatorPrivKeys.map((pk) => {
     const pub = secp256k1.publicKeyCreate(pk, false).slice(1);
     const hash = keccak256(Buffer.from(pub));
-    console.log("Validator address hash:", hash.toString("hex"));
     return Array.from(hash.slice(-20));
   });
 
@@ -91,11 +88,9 @@ describe("SCAI ↔ Solana Bridge", () => {
   // Setup mint & accounts
   // -------------------------
   before(async () => {
-    console.log("Generating config and validatorSet keypairs...");
     config = Keypair.generate();
     validatorSet = Keypair.generate();
 
-    console.log("Creating SPL token mint...");
     mint = await createMint(
       provider.connection,
       payer.payer,
@@ -104,7 +99,6 @@ describe("SCAI ↔ Solana Bridge", () => {
       9
     );
 
-    console.log("Creating user associated token account...");
     const ata = await getOrCreateAssociatedTokenAccount(
       provider.connection,
       payer.payer,
@@ -112,15 +106,12 @@ describe("SCAI ↔ Solana Bridge", () => {
       payer.publicKey
     );
     userToken = ata.address;
-
-    console.log("Mint and ATA setup complete:", mint.toBase58(), userToken.toBase58());
   });
 
   // -------------------------
   // Initialize Bridge
   // -------------------------
   it("initializes bridge", async () => {
-    console.log("Initializing bridge...");
     await program.methods
       .initialize({ validators: validatorAddresses, threshold })
       .accounts({
@@ -135,9 +126,6 @@ describe("SCAI ↔ Solana Bridge", () => {
     const cfg = await program.account.bridgeConfig.fetch(config.publicKey);
     const vs = await program.account.validatorSet.fetch(validatorSet.publicKey);
 
-    console.log("Bridge config:", cfg);
-    console.log("Validator set:", vs);
-
     assert.equal(cfg.validatorThreshold, threshold);
     assert.equal(cfg.paused, false);
     assert.equal(vs.count, validatorAddresses.length);
@@ -147,7 +135,6 @@ describe("SCAI ↔ Solana Bridge", () => {
   // Execute Mint
   // -------------------------
   it("executes mint with valid validator signatures", async () => {
-    console.log("Preparing mint message...");
     const orderId = crypto.randomBytes(32);
     const sender = Buffer.alloc(20, 1);
     const recipient = payer.publicKey.toBuffer();
@@ -163,26 +150,18 @@ describe("SCAI ↔ Solana Bridge", () => {
       timestamp: new BN(Math.floor(Date.now() / 1000)),
     };
 
-    console.log("BridgeMessage object:", msg);
-
     const hash = hashBridgeMessage(msg);
 
-    console.log("Signing message with validators...");
     const signatures = validatorPrivKeys.slice(0, threshold).map((pk) => {
       const { signature, recid } = secp256k1.ecdsaSign(hash, pk);
-      const sigArray = Array.from(Buffer.concat([signature, Buffer.from([recid])]));
-      console.log("Signature:", sigArray);
-      return sigArray;
+      return Array.from(Buffer.concat([signature, Buffer.from([recid])]));
     });
 
-    console.log("Finding execution PDA...");
     const [execPda] = PublicKey.findProgramAddressSync(
       [Buffer.from("exec"), orderId],
       program.programId
     );
-    console.log("Execution PDA:", execPda.toBase58());
 
-    console.log("Calling executeMint RPC...");
     await program.methods
       .executeMint(msg, signatures)
       .accounts({
@@ -197,9 +176,7 @@ describe("SCAI ↔ Solana Bridge", () => {
       })
       .rpc();
 
-    console.log("Fetching recipient token account...");
     const acct = await getAccount(provider.connection, userToken);
-    console.log("Recipient account balance:", acct.amount.toString());
     assert.equal(Number(acct.amount), 1_000_000_000);
   });
 
@@ -207,7 +184,6 @@ describe("SCAI ↔ Solana Bridge", () => {
   // Confirm Unlock
   // -------------------------
   it("confirms unlock with valid signatures", async () => {
-    console.log("Creating burn order...");
     const burnOrder = Keypair.generate();
     const amount = new BN(500_000_000);
     const recipientEvm = validatorAddresses[0];
@@ -237,27 +213,24 @@ describe("SCAI ↔ Solana Bridge", () => {
     };
 
     const hash = hashBridgeMessage(msg);
-
     const signatures = validatorPrivKeys.slice(0, threshold).map((pk) => {
       const { signature, recid } = secp256k1.ecdsaSign(hash, pk);
       return Array.from(Buffer.concat([signature, Buffer.from([recid])]));
     });
 
-    console.log("Calling confirmUnlock RPC...");
     await program.methods
       .confirmUnlock(msg, signatures)
       .accounts({
-        config: config.publicKey,
-        burnOrder: burnOrder.publicKey,
-        validatorSet: validatorSet.publicKey,
+        user: payer.publicKey,
         mint,
-        recipient: userToken,
+        tokenAccount: userToken,
+        bridgeConfig: config.publicKey,
+        systemProgram: SystemProgram.programId,
         tokenProgram: anchor.utils.token.TOKEN_PROGRAM_ID,
       })
       .rpc();
 
     const bo = await program.account.burnOrder.fetch(burnOrder.publicKey);
-    console.log("Burn order executed:", bo.executed);
     assert.equal(bo.executed, true);
   });
 
@@ -277,7 +250,6 @@ describe("SCAI ↔ Solana Bridge", () => {
       .rpc();
 
     const vs = await program.account.validatorSet.fetch(validatorSet.publicKey);
-    console.log("Updated validator set:", vs);
     assert.equal(vs.count, newValidators.length);
   });
 
@@ -303,7 +275,6 @@ describe("SCAI ↔ Solana Bridge", () => {
       await program.methods.executeMint(msg, sigs).rpc();
       assert.fail("Insufficient signatures accepted");
     } catch (err) {
-      console.log("Caught expected insufficient signature error:", err.toString());
       assert.ok(true);
     }
 
@@ -328,7 +299,6 @@ describe("SCAI ↔ Solana Bridge", () => {
         .rpc();
       assert.fail("Replay allowed");
     } catch (err) {
-      console.log("Caught expected replay error:", err.toString());
       assert.ok(true);
     }
   });
