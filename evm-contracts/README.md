@@ -20,17 +20,8 @@ Integrate Solana off-chain signing with your validator keys and feed them to thi
 Optionally, add EIP‑712 structured data signing for even more security and cross-chain consistency.
 
 
-✅ Locking SCAI
-
-✅ Reverting zero lock amounts
-
-✅ Executing unlocks with valid validator signatures
-
-✅ Preventing replay attacks
-
-✅ Rejecting insufficient validator signatures
-
-✅ Rejecting expired unlock messages
+npm i --force
+npx hardhat test --network hardhat
 
 
 solana-test-validator

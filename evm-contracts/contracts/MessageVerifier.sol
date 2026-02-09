@@ -1,38 +1,37 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import "./ValidatorRegistry.sol";
 
+interface IValidatorRegistry {
+    function verifySignatures(bytes32 messageHash, bytes[] calldata signatures) external view returns (bool);
+}
 contract MessageVerifier {
+    IValidatorRegistry public validatorRegistry;
 
-    // Wormhole VAA domain prefix
-    bytes1 private constant VAA_PREFIX = 0x01;
+    constructor(address _validatorRegistry) {
+        require(_validatorRegistry != address(0), "MessageVerifier: zero registry");
+        validatorRegistry = IValidatorRegistry(_validatorRegistry);
+    }
 
-
-
-    function hashVAA(
-        uint8 version,
-        uint32 guardianSetIndex,
-        uint16 emitterChainId,
-        bytes32 emitterAddress,
-        uint64 sequence,
-        bytes calldata payload
+    function hashMessage(
+        uint256 chainId,
+        address recipient,
+        uint256 amount,
+        bytes32 orderId,
+        uint256 nonce,
+        uint256 timestamp
     ) public pure returns (bytes32) {
+        bytes32 rawHash = keccak256(
+            abi.encodePacked(chainId, recipient, amount, orderId, nonce, timestamp)
+        );
+
         return keccak256(
-            abi.encodePacked(
-                VAA_PREFIX,
-                version,
-                guardianSetIndex,
-                emitterChainId,
-                emitterAddress,
-                sequence,
-                payload
-            )
+            abi.encodePacked("\x19Ethereum Signed Message:\n32", rawHash)
         );
     }
 
-
-
-    function hashPayload(bytes calldata payload) external pure returns (bytes32) {
-        return keccak256(payload);
+    function verifySignatures(bytes32 message, bytes[] calldata signatures) external view returns (bool) {
+        return validatorRegistry.verifySignatures(message, signatures);
     }
 }
